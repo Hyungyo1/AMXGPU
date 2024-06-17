@@ -1042,15 +1042,16 @@ class OPTDecoder(OPTPreTrainedModel):
 
         # Policy 0: compute everything on GPU & store KV cache on CPU
         # Policy 1: compute everything on CPU
-        # Policy 2: compute linear on GPU & attention on CPU
+        # Policy 2: compute linear on GPU & attention on CPU (w AMX)
         # Policy 3: compute everything on GPU & store KV cache on CPU (for online)
+        # policy 4: compute linear on GPU & attnetion on CPU (w/o AMX)
 
         # FlexGen baseline: prefill_policy = 0, decoding_policy = 0
 
         prefill_policy_gpu = 3
         decoding_policy_gpu = 3
 
-        prefill_policy = 0
+        prefill_policy = 1
         decoding_policy = 1
 
         num_batch = 1
@@ -1341,9 +1342,8 @@ class OPTDecoder(OPTPreTrainedModel):
                             past_key_value[3],
                         )
                         
-                    elif not is_prefill and decoding_policy == 2:
+                    elif not is_prefill and decoding_policy in [2, 4]:
                         pin_memory(self.layers[idx])
-                        activation = torch.empty_like(hidden_states, device='cuda')
                         load_activation(activation, hidden_states, bsz, 0, overlap=overlap)
                         overlap = True
                         if overlap:
@@ -1410,6 +1410,21 @@ class OPTDecoder(OPTPreTrainedModel):
         # add hidden states from the last decoder layer
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
+
+        del activation_1
+        if overlap and (prefill_policy == 0 or decoding_policy == 0):
+            del activation_2
+        if gpu_percentage < 99:
+            del gpu_buff_1, gpu_buff_2
+
+        del hidden_partial, key_buff, value_buff
+
+        del activation, layer_outputs
+        
+        if tgt_len == 1 and decoding_policy == 0:
+            del key_buff_1, key_buff_2, value_buff_1, value_buff_2
+        
+        torch.cuda.empty_cache()
 
         next_cache = next_decoder_cache if use_cache else None
         if not return_dict:

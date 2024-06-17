@@ -1039,7 +1039,7 @@ class OPTDecoder(OPTPreTrainedModel):
 
         is_offline = True # Whether it's online inference (small batch size) or offline inference (large batch size)
         gpu_percentage = 50 # What percentage of model weights are stored on GPU (MAX is 65 for OPT-30B)
-        overlap = False
+        overlap = True
         input_len = 64
 
         # Policy 0: compute everything on GPU & store KV cache on CPU
@@ -1051,12 +1051,12 @@ class OPTDecoder(OPTPreTrainedModel):
 
         if is_offline:
             prefill_policy = 0
-            decoding_policy = 0
-            num_batch = 1
+            decoding_policy = 2
+            num_batch = 5
             mini_bsz = int(bsz/num_batch)
-
             activation_1 = torch.empty_like(hidden_states[:mini_bsz], device='cuda')
-            activation_2 = torch.empty_like(hidden_states[:mini_bsz], device='cuda')
+            if overlap and (prefill_policy == 0 or decoding_policy == 0):
+                activation_2 = torch.empty_like(hidden_states[:mini_bsz], device='cuda')
 
             gpu_buff_1 = create_gpu_buffer(self.layers[0])
             gpu_buff_2 = create_gpu_buffer(self.layers[0])
@@ -1244,8 +1244,8 @@ class OPTDecoder(OPTPreTrainedModel):
                             if overlap:
                                 past_key_value_decoder = (
                                     past_key_value[0],
-                                    key_buff_2 if idx % 2 else key_buff_1,
-                                    value_buff_2 if idx % 2 else value_buff_1,
+                                    key_buff_2 if i % 2 else key_buff_1,
+                                    value_buff_2 if i % 2 else value_buff_1,
                                     past_key_value[3],
                                 )
                                 # Overlapping
@@ -1333,20 +1333,46 @@ class OPTDecoder(OPTPreTrainedModel):
                         
                     elif not is_prefill and decoding_policy == 2:
                         pin_memory(self.layers[idx])
-                        load_gpu_layer(gpu_buff_1, self.layers[idx], 0, overlap=overlap)
                         activation = torch.empty_like(hidden_states, device='cuda')
                         load_activation(activation, hidden_states, bsz, 0, overlap=overlap)
-                        layer_outputs = decoder_layer(
-                            activation,
-                            attention_mask=causal_attention_mask,
-                            layer_head_mask=(head_mask[idx] if head_mask is not None else None),
-                            past_key_value=past_key_value,
-                            output_attentions=output_attentions,
-                            use_cache=use_cache,
-                            gpu_layer=gpu_buff_1,
-                            policy=decoding_policy,
-                        )
+                        overlap = True
+                        if overlap:
+                            if idx == 0:
+                                load_gpu_layer(gpu_buff_1, self.layers[idx], 0, overlap=overlap)
+                                torch.cuda.synchronize()
+
+                            with torch.cuda.stream(load_weight_stream):
+                                if idx < len(self.layers) - 1:
+                                    load_gpu_layer(gpu_buff_1 if idx % 2 else gpu_buff_2, self.layers[idx+1], 0, overlap=overlap)
+
+                            with torch.cuda.stream(compute_stream):
+                                layer_outputs = decoder_layer(
+                                    activation,
+                                    attention_mask=causal_attention_mask,
+                                    layer_head_mask=(head_mask[idx] if head_mask is not None else None),
+                                    past_key_value=past_key_value,
+                                    output_attentions=output_attentions,
+                                    use_cache=use_cache,
+                                    gpu_layer=gpu_buff_2 if idx % 2 else gpu_buff_1,
+                                    policy=decoding_policy,
+                                )
+                            torch.cuda.synchronize()
+
+                        else:
+                            load_gpu_layer(gpu_buff_1, self.layers[idx], 0, overlap=overlap)
+                            layer_outputs = decoder_layer(
+                                activation,
+                                attention_mask=causal_attention_mask,
+                                layer_head_mask=(head_mask[idx] if head_mask is not None else None),
+                                past_key_value=past_key_value,
+                                output_attentions=output_attentions,
+                                use_cache=use_cache,
+                                gpu_layer=gpu_buff_1,
+                                policy=decoding_policy,
+                            )
+                        
                         hidden_states.copy_(layer_outputs[0])
+
                     else:
                         layer_outputs = decoder_layer(
                             hidden_states,

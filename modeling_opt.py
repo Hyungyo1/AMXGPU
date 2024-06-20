@@ -183,14 +183,14 @@ def move_gpu_layer(layers_ref):
             layers_ref.self_attn.k_proj.bias = nn.Parameter(torch.Tensor(layers_ref.self_attn.k_proj.bias).to('cuda'))
             layers_ref.self_attn.v_proj.weight = nn.Parameter(layers_ref.self_attn.v_proj.weight.to('cuda').permute([0, 3, 1, 2, 4]).contiguous().view(new_dim, new_dim))
             layers_ref.self_attn.v_proj.bias = nn.Parameter(torch.Tensor(layers_ref.self_attn.v_proj.bias).to('cuda'))
-            layers_ref.mlp_linear_add.weight = nn.Parameter(layers_ref.mlp_linear_add.linear.weight.to('cuda').permute([0, 3, 1, 2, 4]).contiguous().view(new_dim, new_dim))
-            layers_ref.mlp_linear_add.bias = nn.Parameter(torch.Tensor(layers_ref.mlp_linear_add.linear.bias).to('cuda'))
+            layers_ref.mha_linear_add.weight = nn.Parameter(layers_ref.mha_linear_add.linear.weight.to('cuda').permute([0, 3, 1, 2, 4]).contiguous().view(new_dim, new_dim))
+            layers_ref.mha_linear_add.bias = nn.Parameter(torch.Tensor(layers_ref.mha_linear_add.linear.bias).to('cuda'))
             layers_ref.final_layer_norm.weight = nn.Parameter(layers_ref.final_layer_norm.weight.to('cuda'))
             layers_ref.final_layer_norm.bias = nn.Parameter(torch.Tensor(layers_ref.final_layer_norm.bias).to('cuda'))
             layers_ref.linear_relu.linear.weight = nn.Parameter(layers_ref.linear_relu.linear.weight.to('cuda').permute([0, 3, 1, 2, 4]).contiguous().view(4 * new_dim, new_dim))
             layers_ref.linear_relu.linear.bias = nn.Parameter(torch.Tensor(layers_ref.linear_relu.linear.bias).to('cuda'))
-            layers_ref.mha_linear_add.weight = nn.Parameter(layers_ref.mha_linear_add.linear.weight.to('cuda').permute([0, 3, 1, 2, 4]).contiguous().view(new_dim, 4 * new_dim))
-            layers_ref.mha_linear_add.bias = nn.Parameter(torch.Tensor(layers_ref.mha_linear_add.linear.bias).to('cuda'))
+            layers_ref.mlp_linear_add.weight = nn.Parameter(layers_ref.mlp_linear_add.linear.weight.to('cuda').permute([0, 3, 1, 2, 4]).contiguous().view(new_dim, 4 * new_dim))
+            layers_ref.mlp_linear_add.bias = nn.Parameter(torch.Tensor(layers_ref.mlp_linear_add.linear.bias).to('cuda'))
 
 def load_gpu_layer(layers, layers_ref, i, overlap=True):
     if i == 0:
@@ -221,8 +221,8 @@ def load_activation(activation, hidden_states, mini_bsz, i, overlap=True):
     activation.copy_(hidden_states[i * mini_bsz : (i + 1) * mini_bsz], non_blocking=overlap)
 
 def load_kv_cache(past_key_value, key_buff, value_buff, mini_bsz, i, overlap=True):
-    key_buff.copy_(past_key_value[1][:, i * mini_bsz : (i + 1) * mini_bsz])
-    value_buff.copy_(past_key_value[2][:, i * mini_bsz : (i + 1) * mini_bsz])
+    key_buff.copy_(past_key_value[1][:, i * mini_bsz : (i + 1) * mini_bsz], non_blocking=overlap)
+    value_buff.copy_(past_key_value[2][:, i * mini_bsz : (i + 1) * mini_bsz], non_blocking=overlap)
 
 def store_cache(past_key_value, tgt_len, key, value, mini_bsz, i, overlap=True):
     past_key_value[1][:tgt_len, i * mini_bsz : (i + 1) * mini_bsz].copy_(key, non_blocking=overlap)
@@ -1037,8 +1037,8 @@ class OPTDecoder(OPTPreTrainedModel):
         
         bsz, tgt_len, _ = hidden_states.size()
 
-        gpu_percentage = 0 # What percentage of model weights are stored on GPU (MAX is 65 for OPT-30B)
-        overlap = True
+        gpu_percentage = 62 # What percentage of model weights are stored on GPU (MAX is 65 for OPT-30B)
+        overlap = False
 
         # Policy 0: compute everything on GPU & store KV cache on CPU
         # Policy 1: compute everything on CPU
@@ -1051,8 +1051,8 @@ class OPTDecoder(OPTPreTrainedModel):
         prefill_policy_gpu = 3
         decoding_policy_gpu = 3
 
-        prefill_policy = 1
-        decoding_policy = 1
+        prefill_policy = 0
+        decoding_policy = 0
 
         num_batch = 1
         mini_bsz = int(bsz/num_batch)
@@ -1237,16 +1237,15 @@ class OPTDecoder(OPTPreTrainedModel):
                         hidden_states = layer_outputs[0]
 
                     elif not is_prefill and decoding_policy == 0:
-                        # pinning memory for overlapping
-                        if overlap:
-                            pin_memory(self.layers[idx])
-                            hidden_states = hidden_states.pin_memory()
-                            past_key_value = (
-                                past_key_value[0],
-                                past_key_value[1].pin_memory(),
-                                past_key_value[2].pin_memory(),
-                                past_key_value[3],
-                            )
+                        # pinning memory
+                        pin_memory(self.layers[idx])
+                        hidden_states = hidden_states.pin_memory()
+                        past_key_value = (
+                            past_key_value[0],
+                            past_key_value[1].pin_memory(),
+                            past_key_value[2].pin_memory(),
+                            past_key_value[3],
+                        )
 
                         cur_len = past_key_value[0].size(1)
 
@@ -1305,9 +1304,9 @@ class OPTDecoder(OPTPreTrainedModel):
 
                             else:
                                 # Non-overlapping
-                                load_activation(activation_1, hidden_states, mini_bsz, i, overlap=overlap)
-                                load_gpu_layer(gpu_buff_1, self.layers[idx], i, overlap=overlap)
-                                load_kv_cache(past_key_value, key_buff_1, value_buff_1, mini_bsz, i, overlap=overlap)
+                                load_activation(activation_1, hidden_states, mini_bsz, i, overlap=True)
+                                load_gpu_layer(gpu_buff_1, self.layers[idx], i, overlap=True)
+                                load_kv_cache(past_key_value, key_buff_1, value_buff_1, mini_bsz, i, overlap=True)
                                 
                                 past_key_value_decoder = (
                                     past_key_value[0],
@@ -1326,8 +1325,8 @@ class OPTDecoder(OPTPreTrainedModel):
                                     gpu_layer=gpu_buff_1,
                                     policy=decoding_policy,
                                 )
-                                store_cache_decoding(past_key_value, cur_len, layer_outputs[2], layer_outputs[3], mini_bsz, i, overlap=overlap)
-                                hidden_states[i * mini_bsz: (i + 1) * mini_bsz].copy_(layer_outputs[0])
+                                store_cache_decoding(past_key_value, cur_len, layer_outputs[2], layer_outputs[3], mini_bsz, i, overlap=True)
+                                hidden_states[i * mini_bsz: (i + 1) * mini_bsz].copy_(layer_outputs[0], non_blocking=True)
                         
                         past_key_value = (
                             torch.empty(

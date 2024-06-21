@@ -21,7 +21,8 @@ import math
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss 
+from transformers.models.opt.numa_alloc import numa_alloc_tensor, numa_free_tensor
 
 from ...activations import ACT2FN
 from ...modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
@@ -125,7 +126,41 @@ def create_gpu_buffer(layers):
 
     return buffers
 
-def pin_memory(layers_ref):
+def pin_memory(layers_ref, enable_cxl=False):
+    def realloc_to_numa(tensor):
+        numa_tensor = numa_alloc_tensor(tensor.shape, tensor.dtype)
+        if numa_tensor is not None:
+            numa_tensor.copy_(tensor)
+            del tensor
+            return numa_tensor
+        else:
+            raise MemoryError("Fail to allocate CXL memory!")
+    if enable_cxl:
+        layers_ref.self_attn_layer_norm.weight = torch.nn.Parameter(realloc_to_numa(layers_ref.self_attn_layer_norm.weight))
+        layers_ref.self_attn_layer_norm.bias = torch.nn.Parameter(realloc_to_numa(layers_ref.self_attn_layer_norm.bias))
+        layers_ref.self_attn.q_proj.weight = torch.nn.Parameter(realloc_to_numa(layers_ref.self_attn.q_proj.weight))
+        layers_ref.self_attn.q_proj.bias = torch.nn.Parameter(realloc_to_numa(layers_ref.self_attn.q_proj.bias))
+        layers_ref.self_attn.k_proj.weight = torch.nn.Parameter(realloc_to_numa(layers_ref.self_attn.k_proj.weight))
+        layers_ref.self_attn.k_proj.bias = torch.nn.Parameter(realloc_to_numa(layers_ref.self_attn.k_proj.bias))
+        layers_ref.self_attn.v_proj.weight = torch.nn.Parameter(realloc_to_numa(layers_ref.self_attn.v_proj.weight))
+        layers_ref.self_attn.v_proj.bias = torch.nn.Parameter(realloc_to_numa(layers_ref.self_attn.v_proj.bias))
+        if hasattr(layers_ref.self_attn, 'out_proj'):
+            layers_ref.self_attn.out_proj.weight = torch.nn.Parameter(realloc_to_numa(layers_ref.self_attn.out_proj.weight))
+            layers_ref.self_attn.out_proj.original_bias = torch.nn.Parameter(realloc_to_numa(layers_ref.self_attn.out_proj.original_bias))
+        else:
+            layers_ref.mha_linear_add.linear.weight = torch.nn.Parameter(realloc_to_numa(layers_ref.mha_linear_add.linear.weight))
+            layers_ref.mha_linear_add.linear.bias = torch.nn.Parameter(realloc_to_numa(layers_ref.mha_linear_add.linear.bias))
+        layers_ref.final_layer_norm.weight = torch.nn.Parameter(realloc_to_numa(layers_ref.final_layer_norm.weight))
+        layers_ref.final_layer_norm.bias = torch.nn.Parameter(realloc_to_numa(layers_ref.final_layer_norm.bias))
+        layers_ref.linear_relu.linear.weight = torch.nn.Parameter(realloc_to_numa(layers_ref.linear_relu.linear.weight))
+        layers_ref.linear_relu.linear.bias = torch.nn.Parameter(realloc_to_numa(layers_ref.linear_relu.linear.bias))
+        if hasattr(layers_ref, 'fc2'):
+            layers_ref.fc2.weight = torch.nn.Parameter(realloc_to_numa(layers_ref.fc2.weight))
+            layers_ref.fc2.original_bias = torch.nn.Parameter(realloc_to_numa(layers_ref.fc2.original_bias))
+        else:
+            layers_ref.mlp_linear_add.linear.weight = torch.nn.Parameter(realloc_to_numa(layers_ref.mlp_linear_add.linear.weight))
+            layers_ref.mlp_linear_add.linear.bias = torch.nn.Parameter(realloc_to_numa(layers_ref.mlp_linear_add.linear.bias))
+
     layers_ref.self_attn_layer_norm.weight.pin_memory()
     layers_ref.self_attn_layer_norm.bias.pin_memory()
     layers_ref.self_attn.q_proj.weight.pin_memory()
@@ -1051,8 +1086,11 @@ class OPTDecoder(OPTPreTrainedModel):
         prefill_policy_gpu = 3
         decoding_policy_gpu = 3
 
-        prefill_policy = 1
-        decoding_policy = 1
+        # prefill_policy = 1
+        # decoding_policy = 1
+
+        prefill_policy = 0
+        decoding_policy = 0
 
         num_batch = 1
         mini_bsz = int(bsz/num_batch)

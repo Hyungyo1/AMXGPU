@@ -135,7 +135,8 @@ def pin_memory(layers_ref, enable_cxl=False):
             return numa_tensor
         else:
             raise MemoryError("Fail to allocate CXL memory!")
-    if enable_cxl:
+    if enable_cxl and not getattr(layers_ref, 'is_cxl', None):
+        layers_ref.is_cxl = True
         layers_ref.self_attn_layer_norm.weight = torch.nn.Parameter(realloc_to_numa(layers_ref.self_attn_layer_norm.weight))
         layers_ref.self_attn_layer_norm.bias = torch.nn.Parameter(realloc_to_numa(layers_ref.self_attn_layer_norm.bias))
         layers_ref.self_attn.q_proj.weight = torch.nn.Parameter(realloc_to_numa(layers_ref.self_attn.q_proj.weight))

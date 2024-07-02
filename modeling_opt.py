@@ -1051,8 +1051,8 @@ class OPTDecoder(OPTPreTrainedModel):
         prefill_policy_gpu = 3
         decoding_policy_gpu = 3
 
-        prefill_policy = 0
-        decoding_policy = 0
+        prefill_policy = 1
+        decoding_policy = 1
 
         num_batch = 1
         mini_bsz = int(bsz/num_batch)
@@ -1084,7 +1084,7 @@ class OPTDecoder(OPTPreTrainedModel):
             is_prefill = True
 
         load_weight_stream = torch.cuda.Stream()
-        compute_stream = torch.cuda.Stream()
+        compute_stream = torch.cuda.Stream(priority=-1)
         store_cache_stream = torch.cuda.Stream()
 
         for idx, decoder_layer in enumerate(self.layers):

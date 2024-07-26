@@ -88,6 +88,8 @@ def _get_unpad_data(attention_mask):
     )
 
 def create_gpu_buffer(layers):
+    dim0, dim1, dim2, dim3, dim4 = layers.self_attn.q_proj.weight.shape
+    new_dim = int(math.sqrt((dim0 * dim1 * dim2 * dim3 * dim4)/2))
     buffers = [
         torch.empty(layers.self_attn_layer_norm.weight.size(), dtype=torch.bfloat16, device='cuda'),
         torch.empty(layers.self_attn_layer_norm.bias.size(), dtype=torch.bfloat16, device='cuda'),
@@ -162,30 +164,30 @@ def pin_memory(layers_ref, enable_cxl=False):
             layers_ref.mlp_linear_add.linear.weight = torch.nn.Parameter(realloc_to_numa(layers_ref.mlp_linear_add.linear.weight))
             layers_ref.mlp_linear_add.linear.bias = torch.nn.Parameter(realloc_to_numa(layers_ref.mlp_linear_add.linear.bias))
 
-    layers_ref.self_attn_layer_norm.weight.pin_memory()
-    layers_ref.self_attn_layer_norm.bias.pin_memory()
-    layers_ref.self_attn.q_proj.weight.pin_memory()
-    layers_ref.self_attn.q_proj.bias.pin_memory()
-    layers_ref.self_attn.k_proj.weight.pin_memory()
-    layers_ref.self_attn.k_proj.bias.pin_memory()
-    layers_ref.self_attn.v_proj.weight.pin_memory()
-    layers_ref.self_attn.v_proj.bias.pin_memory()
+    layers_ref.self_attn_layer_norm.weight=nn.Parameter(layers_ref.self_attn_layer_norm.weight.pin_memory())
+    layers_ref.self_attn_layer_norm.bias=nn.Parameter(layers_ref.self_attn_layer_norm.bias.pin_memory())
+    layers_ref.self_attn.q_proj.weight=nn.Parameter(layers_ref.self_attn.q_proj.weight.pin_memory())
+    layers_ref.self_attn.q_proj.bias=nn.Parameter(layers_ref.self_attn.q_proj.bias.pin_memory())
+    layers_ref.self_attn.k_proj.weight=nn.Parameter(layers_ref.self_attn.k_proj.weight.pin_memory())
+    layers_ref.self_attn.k_proj.bias=nn.Parameter(layers_ref.self_attn.k_proj.bias.pin_memory())
+    layers_ref.self_attn.v_proj.weight=nn.Parameter(layers_ref.self_attn.v_proj.weight.pin_memory())
+    layers_ref.self_attn.v_proj.bias=nn.Parameter(layers_ref.self_attn.v_proj.bias.pin_memory())
     if hasattr(layers_ref.self_attn, 'out_proj'):
-        layers_ref.self_attn.out_proj.weight.pin_memory()
-        layers_ref.self_attn.out_proj.original_bias.pin_memory()
+        layers_ref.self_attn.out_proj.weight=nn.Parameter(layers_ref.self_attn.out_proj.weight.pin_memory())
+        layers_ref.self_attn.out_proj.original_bias=nn.Parameter(layers_ref.self_attn.out_proj.original_bias.pin_memory())
     else:
-        layers_ref.mha_linear_add.linear.weight.pin_memory()
-        layers_ref.mha_linear_add.linear.bias.pin_memory()
-    layers_ref.final_layer_norm.weight.pin_memory()
-    layers_ref.final_layer_norm.bias.pin_memory()
-    layers_ref.linear_relu.linear.weight.pin_memory()
-    layers_ref.linear_relu.linear.bias.pin_memory()
+        layers_ref.mha_linear_add.linear.weight=nn.Parameter(layers_ref.mha_linear_add.linear.weight.pin_memory())
+        layers_ref.mha_linear_add.linear.bias=nn.Parameter(layers_ref.mha_linear_add.linear.bias.pin_memory())
+    layers_ref.final_layer_norm.weight=nn.Parameter(layers_ref.final_layer_norm.weight.pin_memory())
+    layers_ref.final_layer_norm.bias=nn.Parameter(layers_ref.final_layer_norm.bias.pin_memory())
+    layers_ref.linear_relu.linear.weight=nn.Parameter(layers_ref.linear_relu.linear.weight.pin_memory())
+    layers_ref.linear_relu.linear.bias=nn.Parameter(layers_ref.linear_relu.linear.bias.pin_memory())
     if hasattr(layers_ref, 'fc2'):
-        layers_ref.fc2.weight.pin_memory()
-        layers_ref.fc2.original_bias.pin_memory()
+        layers_ref.fc2.weight=nn.Parameter(layers_ref.fc2.weight.data.pin_memory())
+        layers_ref.fc2.original_bias=nn.Parameter(layers_ref.fc2.original_bias.data.pin_memory())
     else:
-        layers_ref.mlp_linear_add.linear.weight.pin_memory()
-        layers_ref.mlp_linear_add.linear.bias.pin_memory()
+        layers_ref.mlp_linear_add.linear.weight=nn.Parameter(layers_ref.mlp_linear_add.linear.weight.pin_memory())
+        layers_ref.mlp_linear_add.linear.bias=nn.Parameter(layers_ref.mlp_linear_add.linear.bias.pin_memory())
 
 def move_gpu_layer(layers_ref):
     if not layers_ref.self_attn.k_proj.weight.is_cuda:
@@ -254,21 +256,40 @@ def load_gpu_layer(layers, layers_ref, i, overlap=True):
             layers[15].copy_(layers_ref.mlp_linear_add.linear.bias, non_blocking=overlap)
     
 def load_activation(activation, hidden_states, mini_bsz, i, overlap=True):
-    activation.copy_(hidden_states[i * mini_bsz : (i + 1) * mini_bsz], non_blocking=overlap)
+    if overlap:
+        hidden_states[i * mini_bsz : (i + 1) * mini_bsz] = hidden_states[i * mini_bsz : (i + 1) * mini_bsz].contiguous().pin_memory()
+    
+    activation.copy_(hidden_states[i * mini_bsz : (i + 1) * mini_bsz])
 
 def load_kv_cache(past_key_value, key_buff, value_buff, mini_bsz, i, overlap=True):
-    key_buff.copy_(past_key_value[1][:, i * mini_bsz : (i + 1) * mini_bsz], non_blocking=overlap)
-    value_buff.copy_(past_key_value[2][:, i * mini_bsz : (i + 1) * mini_bsz], non_blocking=overlap)
+    if overlap:
+        past_key_value[1][:tgt_len, i * mini_bsz : (i + 1) * mini_bsz] = past_key_value[1][:tgt_len, i * mini_bsz : (i + 1) * mini_bsz].contiguous().pin_memory()
+        past_key_value[2][:tgt_len, i * mini_bsz : (i + 1) * mini_bsz] = past_key_value[2][:tgt_len, i * mini_bsz : (i + 1) * mini_bsz].contiguous().pin_memory()
 
-def store_cache(past_key_value, tgt_len, key, value, mini_bsz, i, overlap=True):
-    past_key_value[1][:tgt_len, i * mini_bsz : (i + 1) * mini_bsz].copy_(key, non_blocking=overlap)
-    past_key_value[2][:tgt_len, i * mini_bsz : (i + 1) * mini_bsz].copy_(value, non_blocking=overlap)
+    key_buff.copy_(past_key_value[1][:tgt_len, i * mini_bsz : (i + 1) * mini_bsz], non_blocking=overlap)
+    value_buff.copy_(past_key_value[2][:tgt_len, i * mini_bsz : (i + 1) * mini_bsz], non_blocking=overlap)
+
+def store_cache(past_key_value, tgt_len, key, value, mini_bsz, i, overlap=True, stream=None):
+    if overlap:
+        tensor1 = torch.empty(past_key_value[1][:tgt_len, i * mini_bsz : (i + 1) * mini_bsz].size(), dtype=torch.bfloat16).contiguous().pin_memory()
+        tensor2 = torch.empty(past_key_value[2][:tgt_len, i * mini_bsz : (i + 1) * mini_bsz].size(), dtype=torch.bfloat16).contiguous().pin_memory()
+        tensor1.copy_(key, non_blocking=overlap)
+        tensor2.copy_(value, non_blocking=overlap)
+        stream.synchronize()
+        past_key_value[1][:tgt_len, i * mini_bsz : (i + 1) * mini_bsz].copy_(tensor1)
+        past_key_value[2][:tgt_len, i * mini_bsz : (i + 1) * mini_bsz].copy_(tensor2)
+    else:
+        past_key_value[1][:tgt_len, i * mini_bsz : (i + 1) * mini_bsz].copy_(key, non_blocking=overlap)
+        past_key_value[2][:tgt_len, i * mini_bsz : (i + 1) * mini_bsz].copy_(value, non_blocking=overlap)
 
 def store_cache_decoding(past_key_value, cur_len, key, value, mini_bsz, i, overlap=True):
     past_key_value[1][cur_len: cur_len + 1, i * mini_bsz : (i + 1) * mini_bsz].copy_(key, non_blocking=overlap)
     past_key_value[2][cur_len: cur_len + 1, i * mini_bsz : (i + 1) * mini_bsz].copy_(value, non_blocking=overlap)
 
 def store_hidden(hidden_states_buff, hidden_partial, mini_bsz, i, overlap=True):
+    if overlap:
+        hidden_states_buff[i * mini_bsz: (i + 1) * mini_bsz] = hidden_states_buff[i * mini_bsz: (i + 1) * mini_bsz].contiguous().pin_memory()
+    
     hidden_states_buff[i * mini_bsz: (i + 1) * mini_bsz].copy_(hidden_partial, non_blocking=overlap)
 
 class OPTLearnedPositionalEmbedding(nn.Embedding):
@@ -1073,8 +1094,8 @@ class OPTDecoder(OPTPreTrainedModel):
         
         bsz, tgt_len, _ = hidden_states.size()
 
-        gpu_percentage = 62 # What percentage of model weights are stored on GPU (MAX is 65 for OPT-30B)
-        overlap = False
+        gpu_percentage = 0 # What percentage of model weights are stored on GPU (MAX is 65 for OPT-30B)
+        overlap = True
 
         # Policy 0: compute everything on GPU & store KV cache on CPU
         # Policy 1: compute everything on CPU
@@ -1091,7 +1112,7 @@ class OPTDecoder(OPTPreTrainedModel):
         # decoding_policy = 1
 
         prefill_policy = 0
-        decoding_policy = 0
+        decoding_policy = 1
 
         num_batch = 1
         mini_bsz = int(bsz/num_batch)
@@ -1123,8 +1144,15 @@ class OPTDecoder(OPTPreTrainedModel):
             is_prefill = True
 
         load_weight_stream = torch.cuda.Stream()
-        compute_stream = torch.cuda.Stream(priority=-1)
+        load_activation_stream = torch.cuda.Stream()
+        compute_stream = torch.cuda.Stream()
         store_cache_stream = torch.cuda.Stream()
+        store_hidden_stream = torch.cuda.Stream()
+
+        if overlap:
+            if self.layers[-1].self_attn.q_proj.weight.is_pinned() == False:
+                for idx in range(len(self.layers)):
+                    pin_memory(self.layers[idx])
 
         for idx, decoder_layer in enumerate(self.layers):
             # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
@@ -1165,39 +1193,24 @@ class OPTDecoder(OPTPreTrainedModel):
                     activation = layer_outputs[0]
                     next_decoder_cache += (layer_outputs[2 if output_attentions else 1],)
                 else:
-                    if idx == n_gpu_layers and n_gpu_layers > 0:
-                        hidden_states.copy_(activation)
-                    if is_prefill and prefill_policy == 0:
-                        # pinning memory for overlapping
+                    if idx == n_gpu_layers:
                         if overlap:
-                            pin_memory(self.layers[idx])
                             hidden_states = hidden_states.pin_memory()
-                            # hidden_states_buff = hidden_states_buff.pin_memory()
-                            past_key_value_decoder = (
-                                torch.empty(
-                                    1,
-                                    tgt_len,
-                                    tgt_len,
-                                    1,
-                                    dtype=torch.long,
-                                ).contiguous(),
-                                torch.empty([(tgt_len+32), bsz, self.layers[0].self_attn.num_heads, self.layers[0].self_attn.head_dim]).contiguous().to(torch.bfloat16).pin_memory(),
-                                torch.empty([(tgt_len+32), bsz, self.layers[0].self_attn.num_heads, self.layers[0].self_attn.head_dim]).contiguous().to(torch.bfloat16).pin_memory(),
-                                torch.zeros((tgt_len+32, past_key_value[3].size(1))).contiguous().to(torch.long),
-                            )
-                        else:
-                            past_key_value_decoder = (
-                                torch.empty(
-                                    1,
-                                    tgt_len,
-                                    tgt_len,
-                                    1,
-                                    dtype=torch.long,
-                                ).contiguous(),
-                                torch.empty([(tgt_len+32), bsz, self.layers[0].self_attn.num_heads, self.layers[0].self_attn.head_dim]).contiguous().to(torch.bfloat16),
-                                torch.empty([(tgt_len+32), bsz, self.layers[0].self_attn.num_heads, self.layers[0].self_attn.head_dim]).contiguous().to(torch.bfloat16),
-                                torch.zeros((tgt_len+32, past_key_value[3].size(1))).contiguous().to(torch.long),
-                            )
+                        if n_gpu_layers > 0:
+                            hidden_states.copy_(activation)
+                    if is_prefill and prefill_policy == 0:                        
+                        past_key_value_decoder = (
+                            torch.empty(
+                                1,
+                                tgt_len,
+                                tgt_len,
+                                1,
+                                dtype=torch.long,
+                            ).contiguous(),
+                            torch.empty([(tgt_len+32), bsz, self.layers[0].self_attn.num_heads, self.layers[0].self_attn.head_dim], dtype=torch.bfloat16, device='cpu'),
+                            torch.empty([(tgt_len+32), bsz, self.layers[0].self_attn.num_heads, self.layers[0].self_attn.head_dim], dtype=torch.bfloat16, device='cpu'),
+                            torch.zeros([(tgt_len+32), past_key_value[3].size(1)], dtype=torch.long).contiguous(),
+                        )
 
                         past_key_value = past_key_value_decoder
                         # Multi-batch processing (FlexGen)
@@ -1208,18 +1221,20 @@ class OPTDecoder(OPTPreTrainedModel):
                                     with torch.cuda.stream(load_weight_stream):
                                         if idx == n_gpu_layers:
                                             load_gpu_layer(gpu_buff_1, self.layers[idx], i, overlap=overlap)
+                                    with torch.cuda.stream(load_activation_stream):
                                         load_activation(activation_1, hidden_states, mini_bsz, i, overlap=overlap)
-                                    torch.cuda.synchronize() 
+                                    torch.cuda.synchronize()
 
-                                with torch.cuda.stream(store_cache_stream):
-                                    if i > 0:
-                                        store_cache(past_key_value, tgt_len, key_buff, value_buff, mini_bsz, i-1, overlap=overlap)
-                                        store_hidden(hidden_states, hidden_partial, mini_bsz, i-1, overlap=overlap)
-
-                                with torch.cuda.stream(load_weight_stream):
-                                    if idx < len(self.layers) - 1:
+                                if i > 0:
+                                    with torch.cuda.stream(store_cache_stream):
+                                        store_cache(past_key_value, tgt_len, key_buff_1 if i % 2 else key_buff_2, value_buff_1 if i % 2 else value_buff_2, mini_bsz, i-1, overlap=overlap, stream=store_cache_stream)
+                                    with torch.cuda.stream(store_hidden_stream):
+                                        store_hidden(hidden_states, hidden_partial_1 if i % 2 else hidden_partial_2, mini_bsz, i-1, overlap=overlap)
+                                if idx < len(self.layers) - 1:
+                                    with torch.cuda.stream(load_weight_stream):
                                         load_gpu_layer(gpu_buff_1 if idx % 2 else gpu_buff_2, self.layers[idx+1], i, overlap=overlap)
-                                    if idx < num_batch - 1:
+                                if idx < num_batch - 1:
+                                    with torch.cuda.stream(load_activation_stream):
                                         load_activation(activation_2 if i % 2 else activation_1, hidden_states, mini_bsz, i)
 
                                 with torch.cuda.stream(compute_stream):
@@ -1233,16 +1248,23 @@ class OPTDecoder(OPTPreTrainedModel):
                                         gpu_layer=gpu_buff_2 if idx % 2 else gpu_buff_1,
                                         policy = prefill_policy,
                                     )
+                                    
+                                    if i % 2 == 0:
+                                        hidden_partial_1 = layer_outputs[0]
+                                        key_buff_1 = layer_outputs[2]
+                                        value_buff_1 = layer_outputs[3]
+                                    else:
+                                        hidden_partial_2 = layer_outputs[0]
+                                        key_buff_2 = layer_outputs[2]
+                                        value_buff_2 = layer_outputs[3]
                                 
                                 torch.cuda.synchronize()
-                                hidden_partial = layer_outputs[0]
-                                key_buff = layer_outputs[2]
-                                value_buff = layer_outputs[3]
 
                                 if i == num_batch - 1:
                                     with torch.cuda.stream(store_cache_stream):
-                                        store_cache(past_key_value, tgt_len, key_buff, value_buff, mini_bsz, i, overlap=overlap)
-                                        store_hidden(hidden_states, hidden_partial, mini_bsz, i, overlap=overlap)
+                                        store_cache(past_key_value, tgt_len, key_buff_2 if i % 2 else key_buff_1, value_buff_2 if i % 2 else value_buff_1, mini_bsz, i, overlap=overlap, stream=store_cache_stream)
+                                    with torch.cuda.stream(store_hidden_stream):
+                                        store_hidden(hidden_states, hidden_partial_2 if i % 2 else hidden_partial_1, mini_bsz, i, overlap=overlap)
                                     torch.cuda.synchronize()
 
                             else:
@@ -1277,7 +1299,6 @@ class OPTDecoder(OPTPreTrainedModel):
 
                     elif not is_prefill and decoding_policy == 0:
                         # pinning memory
-                        pin_memory(self.layers[idx])
                         hidden_states = hidden_states.pin_memory()
                         past_key_value = (
                             past_key_value[0],
@@ -1381,7 +1402,7 @@ class OPTDecoder(OPTPreTrainedModel):
                         )
                         
                     elif not is_prefill and decoding_policy in [2, 4]:
-                        pin_memory(self.layers[idx])
+                        hidden_states = hidden_states.pin_memory()
                         load_activation(activation, hidden_states, bsz, 0, overlap=overlap)
                         overlap = True
                         if overlap:
@@ -1448,16 +1469,6 @@ class OPTDecoder(OPTPreTrainedModel):
         # add hidden states from the last decoder layer
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
-
-        del activation_1
-        if overlap and (prefill_policy == 0 or decoding_policy == 0):
-            del activation_2
-        if gpu_percentage < 99:
-            del gpu_buff_1, gpu_buff_2
-
-        del hidden_partial, key_buff, value_buff
-
-        del activation, layer_outputs
         
         if tgt_len == 1 and decoding_policy == 0:
             del key_buff_1, key_buff_2, value_buff_1, value_buff_2

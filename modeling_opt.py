@@ -87,44 +87,80 @@ def _get_unpad_data(attention_mask):
         max_seqlen_in_batch,
     )
 
-def create_gpu_buffer(layers):
-    dim0, dim1, dim2, dim3, dim4 = layers.self_attn.q_proj.weight.shape
-    new_dim = int(math.sqrt((dim0 * dim1 * dim2 * dim3 * dim4)/2))
-    buffers = [
-        torch.empty(layers.self_attn_layer_norm.weight.size(), dtype=torch.bfloat16, device='cuda'),
-        torch.empty(layers.self_attn_layer_norm.bias.size(), dtype=torch.bfloat16, device='cuda'),
-        torch.empty(layers.self_attn.q_proj.weight.size(), dtype=torch.bfloat16, device='cuda'),
-        torch.empty(layers.self_attn.q_proj.bias.size(), dtype=torch.bfloat16, device='cuda'),
-        torch.empty(layers.self_attn.k_proj.weight.size(), dtype=torch.bfloat16, device='cuda'),
-        torch.empty(layers.self_attn.k_proj.bias.size(), dtype=torch.bfloat16, device='cuda'),
-        torch.empty(layers.self_attn.v_proj.weight.size(), dtype=torch.bfloat16, device='cuda'),
-        torch.empty(layers.self_attn.v_proj.bias.size(), dtype=torch.bfloat16, device='cuda'),
-    ]
+def create_buffer(layers, device):
+    if device == 'cuda':
+        buffers = [
+            torch.empty(layers.self_attn_layer_norm.weight.size(), dtype=torch.bfloat16, device=device),
+            torch.empty(layers.self_attn_layer_norm.bias.size(), dtype=torch.bfloat16, device=device),
+            torch.empty(layers.self_attn.q_proj.weight.size(), dtype=torch.bfloat16, device=device),
+            torch.empty(layers.self_attn.q_proj.bias.size(), dtype=torch.bfloat16, device=device),
+            torch.empty(layers.self_attn.k_proj.weight.size(), dtype=torch.bfloat16, device=device),
+            torch.empty(layers.self_attn.k_proj.bias.size(), dtype=torch.bfloat16, device=device),
+            torch.empty(layers.self_attn.v_proj.weight.size(), dtype=torch.bfloat16, device=device),
+            torch.empty(layers.self_attn.v_proj.bias.size(), dtype=torch.bfloat16, device=device),
+        ]
+        
+        if hasattr(layers.self_attn, 'out_proj'):
+            buffers.append(torch.empty(layers.self_attn.out_proj.weight.size(), dtype=torch.bfloat16, device=device))
+            buffers.append(torch.empty(layers.self_attn.out_proj.original_bias.size(), dtype=torch.bfloat16, device=device))
+        elif hasattr(layers, 'mha_linear_add'):
+            buffers.append(torch.empty(layers.mha_linear_add.linear.weight.size(), dtype=torch.bfloat16, device=device))
+            buffers.append(torch.empty(layers.mha_linear_add.linear.bias.size(), dtype=torch.bfloat16, device=device))
+        else:
+            raise AttributeError("Neither 'out_proj' nor 'mha_linear_add' found in layers.self_attn")
+
+        buffers.extend([
+            torch.empty(layers.final_layer_norm.weight.size(), dtype=torch.bfloat16, device=device),
+            torch.empty(layers.final_layer_norm.bias.size(), dtype=torch.bfloat16, device=device),
+            torch.empty(layers.linear_relu.linear.weight.size(), dtype=torch.bfloat16, device=device),
+            torch.empty(layers.linear_relu.linear.bias.size(), dtype=torch.bfloat16, device=device),
+        ])
+
+        if hasattr(layers, 'fc2'):
+            buffers.append(torch.empty(layers.fc2.weight.size(), dtype=torch.bfloat16, device=device))
+            buffers.append(torch.empty(layers.fc2.original_bias.size(), dtype=torch.bfloat16, device=device))
+        elif hasattr(layers, 'mlp_linear_add'):
+            buffers.append(torch.empty(layers.mlp_linear_add.linear.weight.size(), dtype=torch.bfloat16, device=device))
+            buffers.append(torch.empty(layers.mlp_linear_add.linear.bias.size(), dtype=torch.bfloat16, device=device))
+        else:
+            raise AttributeError("Neither 'fc2' nor 'mlp_linear_add' found in layers.self_attn")
     
-    if hasattr(layers.self_attn, 'out_proj'):
-        buffers.append(torch.empty(layers.self_attn.out_proj.weight.size(), dtype=torch.bfloat16, device='cuda'))
-        buffers.append(torch.empty(layers.self_attn.out_proj.original_bias.size(), dtype=torch.bfloat16, device='cuda'))
-    elif hasattr(layers, 'mha_linear_add'):
-        buffers.append(torch.empty(layers.mha_linear_add.linear.weight.size(), dtype=torch.bfloat16, device='cuda'))
-        buffers.append(torch.empty(layers.mha_linear_add.linear.bias.size(), dtype=torch.bfloat16, device='cuda'))
     else:
-        raise AttributeError("Neither 'out_proj' nor 'mha_linear_add' found in layers.self_attn")
+        buffers = [
+            torch.empty(layers.self_attn_layer_norm.weight.size(), dtype=torch.bfloat16, device=device).pin_memory(),
+            torch.empty(layers.self_attn_layer_norm.bias.size(), dtype=torch.bfloat16, device=device).pin_memory(),
+            torch.empty(layers.self_attn.q_proj.weight.size(), dtype=torch.bfloat16, device=device).pin_memory(),
+            torch.empty(layers.self_attn.q_proj.bias.size(), dtype=torch.bfloat16, device=device).pin_memory(),
+            torch.empty(layers.self_attn.k_proj.weight.size(), dtype=torch.bfloat16, device=device).pin_memory(),
+            torch.empty(layers.self_attn.k_proj.bias.size(), dtype=torch.bfloat16, device=device).pin_memory(),
+            torch.empty(layers.self_attn.v_proj.weight.size(), dtype=torch.bfloat16, device=device).pin_memory(),
+            torch.empty(layers.self_attn.v_proj.bias.size(), dtype=torch.bfloat16, device=device).pin_memory(),
+        ]
+        
+        if hasattr(layers.self_attn, 'out_proj'):
+            buffers.append(torch.empty(layers.self_attn.out_proj.weight.size(), dtype=torch.bfloat16, device=device).pin_memory())
+            buffers.append(torch.empty(layers.self_attn.out_proj.original_bias.size(), dtype=torch.bfloat16, device=device).pin_memory())
+        elif hasattr(layers, 'mha_linear_add'):
+            buffers.append(torch.empty(layers.mha_linear_add.linear.weight.size(), dtype=torch.bfloat16, device=device).pin_memory())
+            buffers.append(torch.empty(layers.mha_linear_add.linear.bias.size(), dtype=torch.bfloat16, device=device).pin_memory())
+        else:
+            raise AttributeError("Neither 'out_proj' nor 'mha_linear_add' found in layers.self_attn")
 
-    buffers.extend([
-        torch.empty(layers.final_layer_norm.weight.size(), dtype=torch.bfloat16, device='cuda'),
-        torch.empty(layers.final_layer_norm.bias.size(), dtype=torch.bfloat16, device='cuda'),
-        torch.empty(layers.linear_relu.linear.weight.size(), dtype=torch.bfloat16, device='cuda'),
-        torch.empty(layers.linear_relu.linear.bias.size(), dtype=torch.bfloat16, device='cuda'),
-    ])
+        buffers.extend([
+            torch.empty(layers.final_layer_norm.weight.size(), dtype=torch.bfloat16, device=device).pin_memory(),
+            torch.empty(layers.final_layer_norm.bias.size(), dtype=torch.bfloat16, device=device).pin_memory(),
+            torch.empty(layers.linear_relu.linear.weight.size(), dtype=torch.bfloat16, device=device).pin_memory(),
+            torch.empty(layers.linear_relu.linear.bias.size(), dtype=torch.bfloat16, device=device).pin_memory(),
+        ])
 
-    if hasattr(layers, 'fc2'):
-        buffers.append(torch.empty(layers.fc2.weight.size(), dtype=torch.bfloat16, device='cuda'))
-        buffers.append(torch.empty(layers.fc2.original_bias.size(), dtype=torch.bfloat16, device='cuda'))
-    elif hasattr(layers, 'mlp_linear_add'):
-        buffers.append(torch.empty(layers.mlp_linear_add.linear.weight.size(), dtype=torch.bfloat16, device='cuda'))
-        buffers.append(torch.empty(layers.mlp_linear_add.linear.bias.size(), dtype=torch.bfloat16, device='cuda'))
-    else:
-        raise AttributeError("Neither 'fc2' nor 'mlp_linear_add' found in layers.self_attn")
+        if hasattr(layers, 'fc2'):
+            buffers.append(torch.empty(layers.fc2.weight.size(), dtype=torch.bfloat16, device=device).pin_memory())
+            buffers.append(torch.empty(layers.fc2.original_bias.size(), dtype=torch.bfloat16, device=device).pin_memory())
+        elif hasattr(layers, 'mlp_linear_add'):
+            buffers.append(torch.empty(layers.mlp_linear_add.linear.weight.size(), dtype=torch.bfloat16, device=device).pin_memory())
+            buffers.append(torch.empty(layers.mlp_linear_add.linear.bias.size(), dtype=torch.bfloat16, device=device).pin_memory())
+        else:
+            raise AttributeError("Neither 'fc2' nor 'mlp_linear_add' found in layers.self_attn")
 
     return buffers
 
@@ -230,7 +266,7 @@ def move_gpu_layer(layers_ref):
             layers_ref.mlp_linear_add.weight = nn.Parameter(layers_ref.mlp_linear_add.linear.weight.to('cuda').permute([0, 3, 1, 2, 4]).contiguous().view(new_dim, 4 * new_dim))
             layers_ref.mlp_linear_add.bias = nn.Parameter(torch.Tensor(layers_ref.mlp_linear_add.linear.bias).to('cuda'))
 
-def load_gpu_layer(layers, layers_ref, i, overlap=True):
+def load_layer(layers, layers_ref, i, overlap=True):
     if i == 0:
         layers[0].copy_(layers_ref.self_attn_layer_norm.weight, non_blocking=overlap)
         layers[1].copy_(layers_ref.self_attn_layer_norm.bias, non_blocking=overlap)
@@ -254,6 +290,31 @@ def load_gpu_layer(layers, layers_ref, i, overlap=True):
             layers[9].copy_(layers_ref.mha_linear_add.linear.bias, non_blocking=overlap)
             layers[14].copy_(layers_ref.mlp_linear_add.linear.weight, non_blocking=overlap)
             layers[15].copy_(layers_ref.mlp_linear_add.linear.bias, non_blocking=overlap)
+
+def layer_copy(layers, layers_ref, i, overlap=True):
+    if i == 0:
+        layers[0].copy_(layers_ref[0], non_blocking=overlap)
+        layers[1].copy_(layers_ref[1], non_blocking=overlap)
+        layers[2].copy_(layers_ref[2], non_blocking=overlap)
+        layers[3].copy_(layers_ref[3], non_blocking=overlap)
+        layers[4].copy_(layers_ref[4], non_blocking=overlap)
+        layers[5].copy_(layers_ref[5], non_blocking=overlap)
+        layers[6].copy_(layers_ref[6], non_blocking=overlap)
+        layers[7].copy_(layers_ref[7], non_blocking=overlap)
+        layers[10].copy_(layers_ref[10], non_blocking=overlap)
+        layers[11].copy_(layers_ref[11], non_blocking=overlap)
+        layers[12].copy_(layers_ref[12], non_blocking=overlap)
+        layers[13].copy_(layers_ref[13], non_blocking=overlap)
+        if hasattr(layers_ref, 'fc2'):
+            layers[8].copy_(layers_ref[8], non_blocking=overlap)
+            layers[9].copy_(layers_ref[9], non_blocking=overlap)
+            layers[14].copy_(layers_ref[14], non_blocking=overlap)
+            layers[15].copy_(layers_ref[15], non_blocking=overlap)
+        else:
+            layers[8].copy_(layers_ref[8], non_blocking=overlap)
+            layers[9].copy_(layers_ref[9], non_blocking=overlap)
+            layers[14].copy_(layers_ref[14], non_blocking=overlap)
+            layers[15].copy_(layers_ref[15], non_blocking=overlap)
     
 def load_activation(activation, hidden_states, mini_bsz, i, overlap=True):
     if overlap:
@@ -1094,8 +1155,9 @@ class OPTDecoder(OPTPreTrainedModel):
         
         bsz, tgt_len, _ = hidden_states.size()
 
-        gpu_percentage = 0 # What percentage of model weights are stored on GPU (MAX is 65 for OPT-30B)
+        gpu_percentage = 50 # What percentage of model weights are stored on GPU (MAX is 65 for OPT-30B)
         overlap = True
+        pin_weight = False
 
         # Policy 0: compute everything on GPU & store KV cache on CPU
         # Policy 1: compute everything on CPU
@@ -1120,8 +1182,8 @@ class OPTDecoder(OPTPreTrainedModel):
         if overlap and (prefill_policy == 0 or decoding_policy == 0):
             activation_2 = torch.empty_like(hidden_states[:mini_bsz], device='cuda')
         if gpu_percentage < 99:
-            gpu_buff_1 = create_gpu_buffer(self.layers[-1])
-            gpu_buff_2 = create_gpu_buffer(self.layers[-1])
+            gpu_buff_1 = create_buffer(self.layers[-1], device='cuda')
+            gpu_buff_2 = create_buffer(self.layers[-1], device='cuda')
 
         hidden_partial = None
         key_buff = None
@@ -1149,10 +1211,13 @@ class OPTDecoder(OPTPreTrainedModel):
         store_cache_stream = torch.cuda.Stream()
         store_hidden_stream = torch.cuda.Stream()
 
-        if overlap:
-            if self.layers[-1].self_attn.q_proj.weight.is_pinned() == False:
-                for idx in range(len(self.layers)):
-                    pin_memory(self.layers[idx])
+        if pin_weight and overlap:
+            if self.layers[0].self_attn.q_proj.weight.is_pinned() == False:
+                for idx in range(len(self.layers)-n_gpu_layers):
+                    pin_memory(self.layers[idx+n_gpu_layers])
+        
+        if not pin_weight:
+            cpu_buff = create_buffer(self.layers[-1], device='cpu')
 
         for idx, decoder_layer in enumerate(self.layers):
             # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
@@ -1198,6 +1263,7 @@ class OPTDecoder(OPTPreTrainedModel):
                             hidden_states = hidden_states.pin_memory()
                         if n_gpu_layers > 0:
                             hidden_states.copy_(activation)
+                            del activation
                     if is_prefill and prefill_policy == 0:                        
                         past_key_value_decoder = (
                             torch.empty(
@@ -1220,7 +1286,12 @@ class OPTDecoder(OPTPreTrainedModel):
                                 if i == 0:
                                     with torch.cuda.stream(load_weight_stream):
                                         if idx == n_gpu_layers:
-                                            load_gpu_layer(gpu_buff_1, self.layers[idx], i, overlap=overlap)
+                                            if not pin_weight:
+                                                load_layer(cpu_buff, self.layers[idx], i, overlap=True)
+                                                load_weight_stream.synchronize()
+                                                layer_copy(gpu_buff_1, cpu_buff, i, overlap=overlap)
+                                            else:
+                                                load_layer(gpu_buff_1, self.layers[idx], i, overlap=overlap)
                                     with torch.cuda.stream(load_activation_stream):
                                         load_activation(activation_1, hidden_states, mini_bsz, i, overlap=overlap)
                                     torch.cuda.synchronize()
@@ -1232,7 +1303,12 @@ class OPTDecoder(OPTPreTrainedModel):
                                         store_hidden(hidden_states, hidden_partial_1 if i % 2 else hidden_partial_2, mini_bsz, i-1, overlap=overlap)
                                 if idx < len(self.layers) - 1:
                                     with torch.cuda.stream(load_weight_stream):
-                                        load_gpu_layer(gpu_buff_1 if idx % 2 else gpu_buff_2, self.layers[idx+1], i, overlap=overlap)
+                                        if not pin_weight:
+                                                load_layer(cpu_buff, self.layers[idx+1], i, overlap=False)
+                                                load_weight_stream.synchronize()
+                                                layer_copy(gpu_buff_1 if idx % 2 else gpu_buff_2, cpu_buff, i, overlap=overlap)
+                                        else:
+                                            load_layer(gpu_buff_1 if idx % 2 else gpu_buff_2, self.layers[idx+1], i, overlap=overlap)
                                 if idx < num_batch - 1:
                                     with torch.cuda.stream(load_activation_stream):
                                         load_activation(activation_2 if i % 2 else activation_1, hidden_states, mini_bsz, i)
@@ -1270,7 +1346,7 @@ class OPTDecoder(OPTPreTrainedModel):
                             else:
                                 # Non-overlapping
                                 load_activation(activation_1, hidden_states, mini_bsz, i, overlap=overlap)
-                                load_gpu_layer(gpu_buff_1, self.layers[idx], i, overlap=overlap)
+                                load_layer(gpu_buff_1, self.layers[idx], i, overlap=overlap)
 
                                 layer_outputs = decoder_layer(
                                     activation_1,
@@ -1322,7 +1398,12 @@ class OPTDecoder(OPTPreTrainedModel):
                                 if i == 0:
                                     with torch.cuda.stream(load_weight_stream):
                                         if idx == n_gpu_layers:
-                                            load_gpu_layer(gpu_buff_1, self.layers[idx], i, overlap=overlap)
+                                            if not pin_weight:
+                                                load_layer(cpu_buff, self.layers[idx], i, overlap=False)
+                                                load_weight_stream.synchronize()
+                                                layer_copy(gpu_buff_1, cpu_buff, i, overlap=overlap)
+                                            else:
+                                                load_layer(gpu_buff_1, self.layers[idx], i, overlap=overlap)
                                         load_activation(activation_1, hidden_states, mini_bsz, i, overlap=overlap)
                                         load_kv_cache(past_key_value, key_buff_1, value_buff_1, mini_bsz, i, overlap=overlap)
                                     torch.cuda.synchronize() 
@@ -1334,7 +1415,12 @@ class OPTDecoder(OPTPreTrainedModel):
 
                                 with torch.cuda.stream(load_weight_stream):
                                     if idx < len(self.layers) - 1:
-                                        load_gpu_layer(gpu_buff_1 if idx % 2 else gpu_buff_2, self.layers[idx+1], i, overlap=overlap)
+                                        if not pin_weight:
+                                                load_layer(cpu_buff, self.layers[idx+1], i, overlap=False)
+                                                load_weight_stream.synchronize()
+                                                layer_copy(gpu_buff_1 if idx % 2 else gpu_buff_2, cpu_buff, i, overlap=overlap)
+                                        else:
+                                            load_layer(gpu_buff_1 if idx % 2 else gpu_buff_2, self.layers[idx+1], i, overlap=overlap)
                                     if idx < num_batch - 1:
                                         load_activation(activation_2 if i % 2 else activation_1, hidden_states, mini_bsz, i, overlap=overlap)
                                         load_kv_cache(past_key_value, key_buff_2 if i % 2 else key_buff_1, value_buff_2 if i % 2 else value_buff_1, mini_bsz, i, overlap=overlap)
@@ -1365,7 +1451,7 @@ class OPTDecoder(OPTPreTrainedModel):
                             else:
                                 # Non-overlapping
                                 load_activation(activation_1, hidden_states, mini_bsz, i, overlap=True)
-                                load_gpu_layer(gpu_buff_1, self.layers[idx], i, overlap=True)
+                                load_layer(gpu_buff_1, self.layers[idx], i, overlap=True)
                                 load_kv_cache(past_key_value, key_buff_1, value_buff_1, mini_bsz, i, overlap=True)
                                 
                                 past_key_value_decoder = (
@@ -1403,16 +1489,28 @@ class OPTDecoder(OPTPreTrainedModel):
                         
                     elif not is_prefill and decoding_policy in [2, 4]:
                         hidden_states = hidden_states.pin_memory()
+                        activation = torch.empty_like(hidden_states, device='cuda')
                         load_activation(activation, hidden_states, bsz, 0, overlap=overlap)
                         overlap = True
                         if overlap:
                             if idx == n_gpu_layers:
-                                load_gpu_layer(gpu_buff_1, self.layers[idx], 0, overlap=overlap)
+                                with torch.cuda.stream(load_weight_stream):
+                                    if not pin_weight:
+                                        load_layer(cpu_buff, self.layers[idx], i, overlap=False)
+                                        load_weight_stream.synchronize()
+                                        layer_copy(gpu_buff_1, cpu_buff, i, overlap=overlap)
+                                    else:
+                                        load_layer(gpu_buff_1, self.layers[idx], i, overlap=overlap)
                                 torch.cuda.synchronize()
 
                             with torch.cuda.stream(load_weight_stream):
                                 if idx < len(self.layers) - 1:
-                                    load_gpu_layer(gpu_buff_1 if idx % 2 else gpu_buff_2, self.layers[idx+1], 0, overlap=overlap)
+                                    if not pin_weight:
+                                        load_layer(cpu_buff, self.layers[idx+1], i, overlap=False)
+                                        load_weight_stream.synchronize()
+                                        layer_copy(gpu_buff_1 if idx % 2 else gpu_buff_2, cpu_buff, i, overlap=overlap)
+                                    else:
+                                        load_layer(gpu_buff_1 if idx % 2 else gpu_buff_2, self.layers[idx+1], i, overlap=overlap)
 
                             with torch.cuda.stream(compute_stream):
                                 layer_outputs = decoder_layer(
@@ -1428,7 +1526,7 @@ class OPTDecoder(OPTPreTrainedModel):
                             torch.cuda.synchronize()
 
                         else:
-                            load_gpu_layer(gpu_buff_1, self.layers[idx], 0, overlap=overlap)
+                            load_layer(gpu_buff_1, self.layers[idx], 0, overlap=overlap)
                             layer_outputs = decoder_layer(
                                 activation,
                                 attention_mask=causal_attention_mask,

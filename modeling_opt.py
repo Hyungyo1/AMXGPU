@@ -1178,46 +1178,47 @@ class OPTDecoder(OPTPreTrainedModel):
 
         num_batch = 1
         mini_bsz = int(bsz/num_batch)
-        activation_1 = torch.empty_like(hidden_states[:mini_bsz], device='cuda')
-        if overlap and (prefill_policy == 0 or decoding_policy == 0):
-            activation_2 = torch.empty_like(hidden_states[:mini_bsz], device='cuda')
-        if gpu_percentage < 99:
-            gpu_buff_1 = create_buffer(self.layers[-1], device='cuda')
-            gpu_buff_2 = create_buffer(self.layers[-1], device='cuda')
+        if prefill_policy != 1 or decoding_policy != 1: 
+            activation_1 = torch.empty_like(hidden_states[:mini_bsz], device='cuda')
+            if overlap and (prefill_policy == 0 or decoding_policy == 0):
+                activation_2 = torch.empty_like(hidden_states[:mini_bsz], device='cuda')
+            if gpu_percentage < 99:
+                gpu_buff_1 = create_buffer(self.layers[-1], device='cuda')
+                gpu_buff_2 = create_buffer(self.layers[-1], device='cuda')
 
-        hidden_partial = None
-        key_buff = None
-        value_buff = None
+            hidden_partial = None
+            key_buff = None
+            value_buff = None
 
-        activation = torch.empty_like(hidden_states, device='cuda')
+            activation = torch.empty_like(hidden_states, device='cuda')
 
-        n_gpu_layers = int(len(self.layers) * gpu_percentage / 100)
-        for i in range(n_gpu_layers):
-            move_gpu_layer(self.layers[i])
-        
-        if tgt_len == 1 and decoding_policy == 0:
-            key_buff_1 = torch.empty_like(past_key_values[0][1][:, :mini_bsz], device='cuda')
-            key_buff_2 = torch.empty_like(past_key_values[0][1][:, :mini_bsz], device='cuda')
-            value_buff_1 = torch.empty_like(past_key_values[0][2][:, :mini_bsz], device='cuda')
-            value_buff_2 = torch.empty_like(past_key_values[0][2][:, :mini_bsz], device='cuda')
+            n_gpu_layers = int(len(self.layers) * gpu_percentage / 100)
+            for i in range(n_gpu_layers):
+                move_gpu_layer(self.layers[i])
+            
+            if tgt_len == 1 and decoding_policy == 0:
+                key_buff_1 = torch.empty_like(past_key_values[0][1][:, :mini_bsz], device='cuda')
+                key_buff_2 = torch.empty_like(past_key_values[0][1][:, :mini_bsz], device='cuda')
+                value_buff_1 = torch.empty_like(past_key_values[0][2][:, :mini_bsz], device='cuda')
+                value_buff_2 = torch.empty_like(past_key_values[0][2][:, :mini_bsz], device='cuda')
 
-        is_prefill = False
-        if tgt_len != 1:
-            is_prefill = True
+            is_prefill = False
+            if tgt_len != 1:
+                is_prefill = True
 
-        load_weight_stream = torch.cuda.Stream()
-        load_activation_stream = torch.cuda.Stream()
-        compute_stream = torch.cuda.Stream()
-        store_cache_stream = torch.cuda.Stream()
-        store_hidden_stream = torch.cuda.Stream()
+            load_weight_stream = torch.cuda.Stream()
+            load_activation_stream = torch.cuda.Stream()
+            compute_stream = torch.cuda.Stream()
+            store_cache_stream = torch.cuda.Stream()
+            store_hidden_stream = torch.cuda.Stream()
 
-        if pin_weight and overlap:
-            if self.layers[0].self_attn.q_proj.weight.is_pinned() == False:
-                for idx in range(len(self.layers)-n_gpu_layers):
-                    pin_memory(self.layers[idx+n_gpu_layers])
-        
-        if not pin_weight:
-            cpu_buff = create_buffer(self.layers[-1], device='cpu')
+            if pin_weight and overlap:
+                if self.layers[0].self_attn.q_proj.weight.is_pinned() == False:
+                    for idx in range(len(self.layers)-n_gpu_layers):
+                        pin_memory(self.layers[idx+n_gpu_layers])
+            
+            if not pin_weight:
+                cpu_buff = create_buffer(self.layers[-1], device='cpu')
 
         for idx, decoder_layer in enumerate(self.layers):
             # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)

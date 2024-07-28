@@ -1176,7 +1176,7 @@ class OPTDecoder(OPTPreTrainedModel):
         prefill_policy = 0
         decoding_policy = 2
 
-        num_batch = 32
+        num_batch = 8
         mini_bsz = int(bsz/num_batch)
 
         activation = torch.empty_like(hidden_states, device='cuda')

@@ -1155,7 +1155,7 @@ class OPTDecoder(OPTPreTrainedModel):
         
         bsz, tgt_len, _ = hidden_states.size()
 
-        gpu_percentage = 65 # What percentage of model weights are stored on GPU (MAX is 65 for OPT-30B)
+        gpu_percentage = 0 # What percentage of model weights are stored on GPU (MAX is 65 for OPT-30B)
         overlap = True
         pin_weight = True
 

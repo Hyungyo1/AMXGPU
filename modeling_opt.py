@@ -1155,7 +1155,7 @@ class OPTDecoder(OPTPreTrainedModel):
         
         bsz, tgt_len, _ = hidden_states.size()
 
-        gpu_percentage = 65 # What percentage of model weights are stored on GPU (MAX is 65 for OPT-30B)
+        gpu_percentage = 0 # What percentage of model weights are stored on GPU (MAX is 65 for OPT-30B)
         overlap = True
         pin_weight = True
 
@@ -1498,21 +1498,21 @@ class OPTDecoder(OPTPreTrainedModel):
                             if idx == n_gpu_layers:
                                 with torch.cuda.stream(load_weight_stream):
                                     if not pin_weight:
-                                        load_layer(cpu_buff, self.layers[idx], i, overlap=False)
+                                        load_layer(cpu_buff, self.layers[idx], 0, overlap=False)
                                         load_weight_stream.synchronize()
-                                        layer_copy(gpu_buff_1, cpu_buff, i, overlap=overlap)
+                                        layer_copy(gpu_buff_1, cpu_buff, 0, overlap=overlap)
                                     else:
-                                        load_layer(gpu_buff_1, self.layers[idx], i, overlap=overlap)
+                                        load_layer(gpu_buff_1, self.layers[idx], 0, overlap=overlap)
                                 torch.cuda.synchronize()
 
                             with torch.cuda.stream(load_weight_stream):
                                 if idx < len(self.layers) - 1:
                                     if not pin_weight:
-                                        load_layer(cpu_buff, self.layers[idx+1], i, overlap=False)
+                                        load_layer(cpu_buff, self.layers[idx+1], 0, overlap=False)
                                         load_weight_stream.synchronize()
-                                        layer_copy(gpu_buff_1 if idx % 2 else gpu_buff_2, cpu_buff, i, overlap=overlap)
+                                        layer_copy(gpu_buff_1 if idx % 2 else gpu_buff_2, cpu_buff, 0, overlap=overlap)
                                     else:
-                                        load_layer(gpu_buff_1 if idx % 2 else gpu_buff_2, self.layers[idx+1], i, overlap=overlap)
+                                        load_layer(gpu_buff_1 if idx % 2 else gpu_buff_2, self.layers[idx+1], 0, overlap=overlap)
 
                             with torch.cuda.stream(compute_stream):
                                 layer_outputs = decoder_layer(

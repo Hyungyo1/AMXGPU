@@ -1155,9 +1155,9 @@ class OPTDecoder(OPTPreTrainedModel):
         
         bsz, tgt_len, _ = hidden_states.size()
 
-        gpu_percentage = 50 # What percentage of model weights are stored on GPU (MAX is 65 for OPT-30B)
+        gpu_percentage = 65 # What percentage of model weights are stored on GPU (MAX is 65 for OPT-30B)
         overlap = True
-        pin_weight = False
+        pin_weight = True
 
         # Policy 0: compute everything on GPU & store KV cache on CPU
         # Policy 1: compute everything on CPU
@@ -1174,10 +1174,21 @@ class OPTDecoder(OPTPreTrainedModel):
         # decoding_policy = 1
 
         prefill_policy = 0
-        decoding_policy = 1
+        decoding_policy = 2
 
-        num_batch = 1
+        num_batch = 32
         mini_bsz = int(bsz/num_batch)
+
+        activation = torch.empty_like(hidden_states, device='cuda')
+
+        n_gpu_layers = int(len(self.layers) * gpu_percentage / 100)
+        for i in range(n_gpu_layers):
+            move_gpu_layer(self.layers[i])
+
+        is_prefill = False
+        if tgt_len != 1:
+            is_prefill = True
+
         if prefill_policy != 1 or decoding_policy != 1: 
             activation_1 = torch.empty_like(hidden_states[:mini_bsz], device='cuda')
             if overlap and (prefill_policy == 0 or decoding_policy == 0):
@@ -1189,22 +1200,12 @@ class OPTDecoder(OPTPreTrainedModel):
             hidden_partial = None
             key_buff = None
             value_buff = None
-
-            activation = torch.empty_like(hidden_states, device='cuda')
-
-            n_gpu_layers = int(len(self.layers) * gpu_percentage / 100)
-            for i in range(n_gpu_layers):
-                move_gpu_layer(self.layers[i])
             
             if tgt_len == 1 and decoding_policy == 0:
                 key_buff_1 = torch.empty_like(past_key_values[0][1][:, :mini_bsz], device='cuda')
                 key_buff_2 = torch.empty_like(past_key_values[0][1][:, :mini_bsz], device='cuda')
                 value_buff_1 = torch.empty_like(past_key_values[0][2][:, :mini_bsz], device='cuda')
                 value_buff_2 = torch.empty_like(past_key_values[0][2][:, :mini_bsz], device='cuda')
-
-            is_prefill = False
-            if tgt_len != 1:
-                is_prefill = True
 
             load_weight_stream = torch.cuda.Stream()
             load_activation_stream = torch.cuda.Stream()

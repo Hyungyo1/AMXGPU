@@ -76,19 +76,19 @@ def save_tokenizer(tokenizer, directory):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="opt-175b")
-    parser.add_argument("--save_dir", type=str, default="/storage/hyungyo2/opt-model/opt-175b-1layer/")
+    parser.add_argument("--model", type=str, default="opt-66b")
+    parser.add_argument("--save_dir", type=str, default="/storage/hyungyo2/opt-model/opt-66b/")
     args = parser.parse_args()
 
-    if args.model == "opt-175b":
+    if args.model == "opt-66b":
         config = OptConfig(
-            name="opt-175b",
-            num_hidden_layers=1,
+            name="opt-66b",
+            num_hidden_layers=64,
             max_seq_len=2048,
-            hidden_size=12288,
-            n_head=96,
-            input_dim=12288,
-            ffn_embed_dim=49152,
+            hidden_size=9216,
+            n_head=72,
+            input_dim=9216,
+            ffn_embed_dim=36864,
             vocab_size=50272,
             layer_norm_eps=0.00001,
             pad_token_id=1,

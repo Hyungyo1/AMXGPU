@@ -165,6 +165,7 @@ def create_buffer(layers, device):
     return buffers
 
 def pin_memory(layers_ref, enable_cxl=False):
+    enable_cxl = True
     def realloc_to_numa(tensor):
         numa_tensor = numa_alloc_tensor(tensor.shape, tensor.dtype)
         if numa_tensor is not None:
@@ -200,30 +201,31 @@ def pin_memory(layers_ref, enable_cxl=False):
             layers_ref.mlp_linear_add.linear.weight = torch.nn.Parameter(realloc_to_numa(layers_ref.mlp_linear_add.linear.weight))
             layers_ref.mlp_linear_add.linear.bias = torch.nn.Parameter(realloc_to_numa(layers_ref.mlp_linear_add.linear.bias))
 
-    layers_ref.self_attn_layer_norm.weight=nn.Parameter(layers_ref.self_attn_layer_norm.weight.pin_memory())
-    layers_ref.self_attn_layer_norm.bias=nn.Parameter(layers_ref.self_attn_layer_norm.bias.pin_memory())
-    layers_ref.self_attn.q_proj.weight=nn.Parameter(layers_ref.self_attn.q_proj.weight.pin_memory())
-    layers_ref.self_attn.q_proj.bias=nn.Parameter(layers_ref.self_attn.q_proj.bias.pin_memory())
-    layers_ref.self_attn.k_proj.weight=nn.Parameter(layers_ref.self_attn.k_proj.weight.pin_memory())
-    layers_ref.self_attn.k_proj.bias=nn.Parameter(layers_ref.self_attn.k_proj.bias.pin_memory())
-    layers_ref.self_attn.v_proj.weight=nn.Parameter(layers_ref.self_attn.v_proj.weight.pin_memory())
-    layers_ref.self_attn.v_proj.bias=nn.Parameter(layers_ref.self_attn.v_proj.bias.pin_memory())
-    if hasattr(layers_ref.self_attn, 'out_proj'):
-        layers_ref.self_attn.out_proj.weight=nn.Parameter(layers_ref.self_attn.out_proj.weight.pin_memory())
-        layers_ref.self_attn.out_proj.original_bias=nn.Parameter(layers_ref.self_attn.out_proj.original_bias.pin_memory())
-    else:
-        layers_ref.mha_linear_add.linear.weight=nn.Parameter(layers_ref.mha_linear_add.linear.weight.pin_memory())
-        layers_ref.mha_linear_add.linear.bias=nn.Parameter(layers_ref.mha_linear_add.linear.bias.pin_memory())
-    layers_ref.final_layer_norm.weight=nn.Parameter(layers_ref.final_layer_norm.weight.pin_memory())
-    layers_ref.final_layer_norm.bias=nn.Parameter(layers_ref.final_layer_norm.bias.pin_memory())
-    layers_ref.linear_relu.linear.weight=nn.Parameter(layers_ref.linear_relu.linear.weight.pin_memory())
-    layers_ref.linear_relu.linear.bias=nn.Parameter(layers_ref.linear_relu.linear.bias.pin_memory())
-    if hasattr(layers_ref, 'fc2'):
-        layers_ref.fc2.weight=nn.Parameter(layers_ref.fc2.weight.data.pin_memory())
-        layers_ref.fc2.original_bias=nn.Parameter(layers_ref.fc2.original_bias.data.pin_memory())
-    else:
-        layers_ref.mlp_linear_add.linear.weight=nn.Parameter(layers_ref.mlp_linear_add.linear.weight.pin_memory())
-        layers_ref.mlp_linear_add.linear.bias=nn.Parameter(layers_ref.mlp_linear_add.linear.bias.pin_memory())
+    if not enable_cxl:
+        layers_ref.self_attn_layer_norm.weight=nn.Parameter(layers_ref.self_attn_layer_norm.weight.pin_memory())
+        layers_ref.self_attn_layer_norm.bias=nn.Parameter(layers_ref.self_attn_layer_norm.bias.pin_memory())
+        layers_ref.self_attn.q_proj.weight=nn.Parameter(layers_ref.self_attn.q_proj.weight.pin_memory())
+        layers_ref.self_attn.q_proj.bias=nn.Parameter(layers_ref.self_attn.q_proj.bias.pin_memory())
+        layers_ref.self_attn.k_proj.weight=nn.Parameter(layers_ref.self_attn.k_proj.weight.pin_memory())
+        layers_ref.self_attn.k_proj.bias=nn.Parameter(layers_ref.self_attn.k_proj.bias.pin_memory())
+        layers_ref.self_attn.v_proj.weight=nn.Parameter(layers_ref.self_attn.v_proj.weight.pin_memory())
+        layers_ref.self_attn.v_proj.bias=nn.Parameter(layers_ref.self_attn.v_proj.bias.pin_memory())
+        if hasattr(layers_ref.self_attn, 'out_proj'):
+            layers_ref.self_attn.out_proj.weight=nn.Parameter(layers_ref.self_attn.out_proj.weight.pin_memory())
+            layers_ref.self_attn.out_proj.original_bias=nn.Parameter(layers_ref.self_attn.out_proj.original_bias.pin_memory())
+        else:
+            layers_ref.mha_linear_add.linear.weight=nn.Parameter(layers_ref.mha_linear_add.linear.weight.pin_memory())
+            layers_ref.mha_linear_add.linear.bias=nn.Parameter(layers_ref.mha_linear_add.linear.bias.pin_memory())
+        layers_ref.final_layer_norm.weight=nn.Parameter(layers_ref.final_layer_norm.weight.pin_memory())
+        layers_ref.final_layer_norm.bias=nn.Parameter(layers_ref.final_layer_norm.bias.pin_memory())
+        layers_ref.linear_relu.linear.weight=nn.Parameter(layers_ref.linear_relu.linear.weight.pin_memory())
+        layers_ref.linear_relu.linear.bias=nn.Parameter(layers_ref.linear_relu.linear.bias.pin_memory())
+        if hasattr(layers_ref, 'fc2'):
+            layers_ref.fc2.weight=nn.Parameter(layers_ref.fc2.weight.data.pin_memory())
+            layers_ref.fc2.original_bias=nn.Parameter(layers_ref.fc2.original_bias.data.pin_memory())
+        else:
+            layers_ref.mlp_linear_add.linear.weight=nn.Parameter(layers_ref.mlp_linear_add.linear.weight.pin_memory())
+            layers_ref.mlp_linear_add.linear.bias=nn.Parameter(layers_ref.mlp_linear_add.linear.bias.pin_memory())
 
 def move_gpu_layer(layers_ref):
     if not layers_ref.self_attn.k_proj.weight.is_cuda:
@@ -1174,9 +1176,9 @@ class OPTDecoder(OPTPreTrainedModel):
         # decoding_policy = 1
 
         prefill_policy = 0
-        decoding_policy = 2
+        decoding_policy = 1
 
-        num_batch = 9
+        num_batch = 8
         mini_bsz = int(bsz/num_batch)
 
         activation = torch.empty_like(hidden_states, device='cuda')
@@ -1311,7 +1313,7 @@ class OPTDecoder(OPTPreTrainedModel):
                                                 layer_copy(gpu_buff_1 if idx % 2 else gpu_buff_2, cpu_buff, i, overlap=overlap)
                                         else:
                                             load_layer(gpu_buff_1 if idx % 2 else gpu_buff_2, self.layers[idx+1], i, overlap=overlap)
-                                if idx < num_batch - 1:
+                                if i < num_batch - 1:
                                     with torch.cuda.stream(load_activation_stream):
                                         load_activation(activation_2 if i % 2 else activation_1, hidden_states, mini_bsz, i)
 
@@ -1493,7 +1495,6 @@ class OPTDecoder(OPTPreTrainedModel):
                         hidden_states = hidden_states.pin_memory()
                         activation = torch.empty_like(hidden_states, device='cuda')
                         load_activation(activation, hidden_states, bsz, 0, overlap=overlap)
-                        overlap = True
                         if overlap:
                             if idx == n_gpu_layers:
                                 with torch.cuda.stream(load_weight_stream):

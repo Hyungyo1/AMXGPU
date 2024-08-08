@@ -1312,7 +1312,7 @@ class OPTDecoder(OPTPreTrainedModel):
                                             load_layer(gpu_buff_1 if idx % 2 else gpu_buff_2, self.layers[idx+1], i, overlap=overlap)
                                 if i < num_minibatch - 1:
                                     with torch.cuda.stream(load_activation_stream):
-                                        load_activation(activation_2 if i % 2 else activation_1, hidden_states, mini_bsz, i)
+                                        load_activation(activation_1 if i % 2 else activation_2, hidden_states, mini_bsz, i)
 
                                 with torch.cuda.stream(compute_stream):
                                     layer_outputs = decoder_layer(
@@ -1498,17 +1498,17 @@ class OPTDecoder(OPTPreTrainedModel):
                             if idx == n_gpu_layers:
                                 with torch.cuda.stream(load_weight_stream):
                                     if not pin_weight:
-                                        load_layer(cpu_buff, self.layers[idx], 0, overlap=False)
+                                        load_layer(cpu_buff, self.layers[idx], 0, overlap=overlap)
                                         load_weight_stream.synchronize()
-                                        layer_copy(gpu_buff_1, cpu_buff, 0, overlap=overlap)
+                                        layer_copy(gpu_buff_2 if idx % 2 else gpu_buff_1, cpu_buff, 0, overlap=overlap)
                                     else:
-                                        load_layer(gpu_buff_1, self.layers[idx], 0, overlap=overlap)
+                                        load_layer(gpu_buff_2 if idx % 2 else gpu_buff_1, self.layers[idx], 0, overlap=overlap)
                                 torch.cuda.synchronize()
 
                             with torch.cuda.stream(load_weight_stream):
                                 if idx < len(self.layers) - 1:
                                     if not pin_weight:
-                                        load_layer(cpu_buff, self.layers[idx+1], 0, overlap=False)
+                                        load_layer(cpu_buff, self.layers[idx+1], 0, overlap=overlap)
                                         load_weight_stream.synchronize()
                                         layer_copy(gpu_buff_1 if idx % 2 else gpu_buff_2, cpu_buff, 0, overlap=overlap)
                                     else:
